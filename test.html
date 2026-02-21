@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ETF Stock Exposure Tool (Serverless)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 30px; color: #333; }
+        .search-wrapper { position: relative; display: inline-block; }
+        .benchmark-wrapper { position: relative; display: inline-block; margin-left: 10px; }
+        .search-container { margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+        input[type="text"] { padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; text-transform: uppercase; }
+        #tickerInput { width: 250px; }
+        #benchmarkInput { width: 160px; background-color: #f8f9fa; border: 1px solid #ced4da; } 
+        
+        .autocomplete-items { position: absolute; border: 1px solid #d4d4d4; border-top: none; z-index: 99; top: 100%; left: 0; right: 0; background-color: #fff; max-height: 250px; overflow-y: auto; box-shadow: 0px 4px 6px rgba(0,0,0,0.1); border-radius: 0 0 4px 4px; }
+        .autocomplete-items div { padding: 10px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 14px; color: #333; }
+        .autocomplete-items div:hover { background-color: #f1f1f1; color: #4a235a; }
+        .ticker-symbol { font-weight: bold; color: #4a235a; margin-right: 5px; }
+        
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; color: white; }
+        button.search-btn { background-color: #28a745; }
+        button.search-btn:hover { background-color: #218838; }
+
+        .tags-area { margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; }
+        .tag { background-color: #e8daef; color: #4a235a; padding: 5px 15px; border-radius: 20px; font-weight: bold; display: flex; align-items: center; gap: 5px; }
+        .tag span { cursor: pointer; color: #888; }
+        .tag span:hover { color: red; }
+        #tableContainer { display: none; margin-top: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border-bottom: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f8f9fa; cursor: pointer; user-select: none; }
+        th:hover { background-color: #e9ecef; }
+        .sort-arrow { font-size: 0.8em; margin-left: 5px; color: #888; }
+        
+        .no-result { padding: 20px; color: #856404; font-weight: bold; text-align: center; background-color: #fff3cd; border-radius: 4px; margin-top: 20px; display: none; border: 1px solid #ffeeba; }
+        .badge { background-color: #6f42c1; color: white; padding: 3px 8px; border-radius: 12px; font-size: 12px; margin-left: 10px; vertical-align: middle; }
+        .expense-tag { font-size: 0.85em; color: #6c757d; margin-left: 8px; font-weight: normal; }
+        
+        .etf-link { color: #0056b3; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+        .etf-link:hover { color: #003d82; }
+        
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
+        .modal-content { background-color: #fff; margin: 10vh auto; padding: 20px 30px; border-radius: 8px; width: 850px; max-width: 95%; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 15px; }
+        .modal-header h3 { margin: 0; color: #4a235a; }
+        .close-btn { color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; }
+        .close-btn:hover { color: #333; }
+        .modal-table th { background-color: #f1f1f1; }
+        
+        .total-row { background-color: #f8f9fa; font-weight: bold; border-top: 2px solid #ccc; }
+        .total-row td { color: #d35400; }
+        
+        .return-box { background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; padding: 15px; overflow-x: auto; }
+        .return-box h4 { margin: 0 0 10px 0; color: #333; border-bottom: 2px solid #ddd; padding-bottom: 5px; }
+        .return-table th { padding: 6px 5px; text-align: right; border-bottom: 2px solid #ddd; font-size: 0.85em; color: #555; background-color: transparent; }
+        .return-table td { padding: 8px 5px; border-bottom: 1px dashed #ddd; font-size: 0.9em; text-align: right; font-weight: bold; }
+        
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #28a745; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: none; margin-left: 10px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <h2>ETF Stock Exposure Tool <span class="badge">Supabase Live 연동</span></h2>
+    
+    <div class="search-container">
+        <div class="search-wrapper">
+            <input type="text" id="tickerInput" placeholder="종목 코드 입력 (예: AAPL)" oninput="handleInput()">
+            <div id="autocompleteList" class="autocomplete-items"></div>
+        </div>
+        
+        <div class="benchmark-wrapper">
+            <input type="text" id="benchmarkInput" placeholder="비교 지수 (예: SPY)" oninput="handleBenchmarkInput()">
+            <div id="benchmarkList" class="autocomplete-items"></div>
+        </div>
+        
+        <button class="search-btn" onclick="simulateSearch()">검색 실행</button>
+        <div id="loadingSpinner" class="loader"></div>
+    </div>
+
+    <div class="tags-area" id="tagsArea"></div>
+    <div id="noResultMsg" class="no-result">조건을 만족하는 ETF가 없거나 데이터가 존재하지 않습니다.</div>
+
+    <div id="tableContainer">
+        <table>
+            <thead id="tableHead"></thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+    </div>
+
+    <div id="holdingsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">ETF 상세 정보</h3>
+                <span class="close-btn" onclick="closeModal()">&times;</span>
+            </div>
+            
+            <div style="display: flex; gap: 20px;">
+                <div style="flex: 1.1;">
+                    <table class="modal-table">
+                        <thead>
+                            <tr>
+                                <th>종목 (Stock)</th>
+                                <th>비중 (%)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="modalBody"></tbody>
+                    </table>
+                </div>
+                
+                <div style="flex: 1.3;" class="return-box">
+                    <h4>Total Return 비교</h4>
+                    <table class="return-table" style="width: 100%;">
+                        <thead id="returnHead"></thead>
+                        <tbody id="returnBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // 🚨 여기에 복사해둔 Supabase 주소와 키를 입력하세요!
+        const SUPABASE_URL = 'https://zctihkfsqqcklutiwwlg.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_lQWogdeM3fE8NT-1R0jEaQ_V-zKV7pA';
+        
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        let selectedTickers = [];
+        let dynamicExposure = {}; 
+        let currentFilteredData = [];
+        let etfInfoCache = {};
+        let etfReturnsCache = {};
+        
+        let sortDirection = true; 
+        let debounceTimer;
+        let benchDebounceTimer;
+
+        async function handleInput() {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(async () => {
+                const inputVal = document.getElementById('tickerInput').value.trim().toUpperCase();
+                const listContainer = document.getElementById('autocompleteList');
+                listContainer.innerHTML = ''; 
+                if (!inputVal) return;
+
+                const { data, error } = await supabaseClient
+                    .from('stock_list')
+                    .select('symbol, name')
+                    .ilike('symbol', `%${inputVal}%`)
+                    .limit(10);
+                
+                if (data) {
+                    data.sort((a, b) => a.symbol.length - b.symbol.length).forEach(item => {
+                        const div = document.createElement('div');
+                        div.innerHTML = `<span class="ticker-symbol">${item.symbol}</span> - ${item.name}`;
+                        div.onclick = function() { addTicker(item.symbol); };
+                        listContainer.appendChild(div);
+                    });
+                }
+            }, 300);
+        }
+
+        async function handleBenchmarkInput() {
+            clearTimeout(benchDebounceTimer);
+            benchDebounceTimer = setTimeout(async () => {
+                const inputVal = document.getElementById('benchmarkInput').value.trim().toUpperCase();
+                const listContainer = document.getElementById('benchmarkList');
+                listContainer.innerHTML = ''; 
+                if (!inputVal) return;
+
+                const { data, error } = await supabaseClient
+                    .from('etf_returns')
+                    .select('etf_ticker')
+                    .ilike('etf_ticker', `%${inputVal}%`)
+                    .limit(10);
+                
+                if (data) {
+                    data.sort((a, b) => a.etf_ticker.length - b.etf_ticker.length).forEach(item => {
+                        const div = document.createElement('div');
+                        div.innerHTML = `<span class="ticker-symbol">${item.etf_ticker}</span>`;
+                        div.onclick = function() { 
+                            document.getElementById('benchmarkInput').value = item.etf_ticker;
+                            listContainer.innerHTML = '';
+                        };
+                        listContainer.appendChild(div);
+                    });
+                }
+            }, 300);
+        }
+
+        async function addTicker(ticker) {
+            if (!selectedTickers.includes(ticker)) {
+                selectedTickers.push(ticker);
+                renderTags();
+                hideResults();
+                
+                document.getElementById('loadingSpinner').style.display = 'inline-block';
+                
+                const { data, error } = await supabaseClient
+                    .from('etf_exposure')
+                    .select('etf_ticker, weight')
+                    .eq('stock_ticker', ticker);
+                
+                dynamicExposure[ticker] = {};
+                if(data) {
+                    data.forEach(row => {
+                        dynamicExposure[ticker][row.etf_ticker] = row.weight;
+                    });
+                }
+                document.getElementById('loadingSpinner').style.display = 'none';
+            }
+            document.getElementById('tickerInput').value = '';
+            document.getElementById('autocompleteList').innerHTML = '';
+        }
+
+        function renderTags() {
+            const tagsArea = document.getElementById('tagsArea');
+            tagsArea.innerHTML = ''; 
+            selectedTickers.forEach(ticker => {
+                const tagDiv = document.createElement('div');
+                tagDiv.className = 'tag';
+                tagDiv.innerHTML = `${ticker} <span onclick="removeTicker('${ticker}')">✖</span>`;
+                tagsArea.appendChild(tagDiv);
+            });
+        }
+
+        function removeTicker(tickerToRemove) {
+            selectedTickers = selectedTickers.filter(ticker => ticker !== tickerToRemove);
+            delete dynamicExposure[tickerToRemove]; 
+            renderTags();
+            hideResults();
+        }
+
+        function hideResults() {
+            document.getElementById('tableContainer').style.display = 'none';
+            document.getElementById('noResultMsg').style.display = 'none';
+        }
+
+        async function simulateSearch() {
+            if(selectedTickers.length === 0) {
+                alert("검색할 종목을 먼저 선택해주세요!");
+                return;
+            }
+            document.getElementById('loadingSpinner').style.display = 'inline-block';
+            
+            let commonEtfs = Object.keys(dynamicExposure[selectedTickers[0]] || {});
+            for(let i = 1; i < selectedTickers.length; i++) {
+                const ticker = selectedTickers[i];
+                const etfsForTicker = Object.keys(dynamicExposure[ticker] || {});
+                commonEtfs = commonEtfs.filter(etf => etfsForTicker.includes(etf));
+            }
+            
+            if(commonEtfs.length === 0) {
+                document.getElementById('tableContainer').style.display = 'none';
+                document.getElementById('noResultMsg').style.display = 'block';
+                document.getElementById('loadingSpinner').style.display = 'none';
+                return;
+            }
+
+            const { data: infoData } = await supabaseClient.from('etf_info').select('*').in('etf_ticker', commonEtfs);
+            if(infoData) infoData.forEach(row => etfInfoCache[row.etf_ticker] = row.expense_ratio);
+
+            const { data: returnData } = await supabaseClient.from('etf_returns').select('*').in('etf_ticker', commonEtfs);
+            if(returnData) returnData.forEach(row => etfReturnsCache[row.etf_ticker] = row);
+
+            const benchTicker = document.getElementById('benchmarkInput').value.trim().toUpperCase();
+            if (benchTicker && !etfReturnsCache[benchTicker]) {
+                const { data: benchData } = await supabaseClient.from('etf_returns').select('*').eq('etf_ticker', benchTicker);
+                if(benchData && benchData.length > 0) etfReturnsCache[benchTicker] = benchData[0];
+            }
+
+            currentFilteredData = commonEtfs.map(etf => {
+                let etfData = { ticker: etf, name: etf, weights: {} };
+                selectedTickers.forEach(ticker => {
+                    etfData.weights[ticker] = dynamicExposure[ticker][etf] || 0;
+                });
+                return etfData;
+            });
+
+            document.getElementById('noResultMsg').style.display = 'none';
+            document.getElementById('tableContainer').style.display = 'block';
+            document.getElementById('loadingSpinner').style.display = 'none';
+            
+            renderTableHeaders();
+            renderTable(currentFilteredData);
+        }
+
+        function renderTableHeaders() {
+            const thead = document.getElementById('tableHead');
+            let headerHTML = `<tr>
+                <th onclick="sortTable('ticker')">ETF Ticker <span class="sort-arrow">↕</span></th>`;
+            selectedTickers.forEach(ticker => {
+                headerHTML += `<th onclick="sortTable('${ticker}')">${ticker} 비중(%) <span class="sort-arrow">↕</span></th>`;
+            });
+            headerHTML += `</tr>`;
+            thead.innerHTML = headerHTML;
+        }
+
+        function renderTable(data) {
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = '';
+            data.forEach(etf => {
+                const exp = etfInfoCache[etf.ticker];
+                let expenseStr = (exp !== undefined && exp !== null) ? `<span class="expense-tag">(보수: ${exp}%)</span>` : `<span class="expense-tag" style="color:#bbb;">(보수: ?)</span>`;
+
+                let rowHTML = `<tr><td><a class="etf-link" onclick="showHoldings('${etf.ticker}')"><strong>${etf.ticker}</strong></a>${expenseStr}</td>`;
+                
+                selectedTickers.forEach(ticker => {
+                    const weight = etf.weights[ticker] || 0; 
+                    rowHTML += `<td>${weight.toFixed(2)}%</td>`;
+                });
+                rowHTML += `</tr>`;
+                tbody.innerHTML += rowHTML;
+            });
+        }
+
+        function sortTable(columnKey) {
+            currentFilteredData.sort((a, b) => {
+                if (columnKey === 'ticker') {
+                    let valA = a[columnKey];
+                    let valB = b[columnKey];
+                    return sortDirection ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                } else {
+                    let valA = a.weights[columnKey] || 0;
+                    let valB = b.weights[columnKey] || 0;
+                    return sortDirection ? valB - valA : valA - valB;
+                }
+            });
+            sortDirection = !sortDirection; 
+            renderTable(currentFilteredData);
+        }
+
+        async function showHoldings(etfTicker) {
+            const { data: top10Holdings } = await supabaseClient
+                .from('etf_exposure')
+                .select('stock_ticker, weight')
+                .eq('etf_ticker', etfTicker)
+                .order('weight', { ascending: false })
+                .limit(10);
+                
+            let totalWeight = 0;
+            const tbody = document.getElementById('modalBody');
+            tbody.innerHTML = '';
+            
+            if (!top10Holdings || top10Holdings.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="2" style="text-align:center;">상세 종목 정보가 없습니다.</td></tr>';
+            } else {
+                const stockTickers = top10Holdings.map(h => h.stock_ticker);
+                const { data: stockNamesData } = await supabaseClient.from('stock_list').select('*').in('symbol', stockTickers);
+                let stockNameMap = {};
+                if(stockNamesData) stockNamesData.forEach(row => stockNameMap[row.symbol] = row.name);
+
+                top10Holdings.forEach((item) => {
+                    totalWeight += item.weight;
+                    const stockName = stockNameMap[item.stock_ticker] ? `<span style="font-size:0.85em; color:#666; margin-left:8px;">${stockNameMap[item.stock_ticker]}</span>` : '';
+                    tbody.innerHTML += `<tr>
+                        <td><strong>${item.stock_ticker}</strong> ${stockName}</td>
+                        <td>${item.weight.toFixed(2)}%</td>
+                    </tr>`;
+                });
+                tbody.innerHTML += `<tr class="total-row">
+                    <td style="text-align: right;">상위 10개 종목 합계 :</td>
+                    <td>${totalWeight.toFixed(2)}%</td>
+                </tr>`;
+            }
+            
+            const exp = etfInfoCache[etfTicker];
+            let expStr = (exp !== undefined && exp !== null) ? `(보수: ${exp}%)` : `(보수: ?)`;
+            document.getElementById('modalTitle').innerText = `${etfTicker} ${expStr} 상위 종목 (Top 10)`;
+
+            const benchInputVal = document.getElementById('benchmarkInput').value.trim().toUpperCase();
+            const benchTicker = benchInputVal !== "" ? benchInputVal : null;
+
+            // [핵심 추가] 팝업창을 열 때, 벤치마크 데이터가 캐시에 없으면 Supabase에서 실시간으로 가져옵니다!
+            if (benchTicker && !etfReturnsCache[benchTicker]) {
+                const { data: benchDataFetch } = await supabaseClient
+                    .from('etf_returns')
+                    .select('*')
+                    .eq('etf_ticker', benchTicker);
+                if(benchDataFetch && benchDataFetch.length > 0) {
+                    etfReturnsCache[benchTicker] = benchDataFetch[0];
+                }
+            }
+
+            const retData = etfReturnsCache[etfTicker] || {};
+            const benchData = benchTicker ? (etfReturnsCache[benchTicker] || {}) : {};
+
+            let headHTML = `<tr><th style="text-align: left;">기간</th><th>${etfTicker}</th>`;
+            if (benchTicker) headHTML += `<th>${benchTicker}</th><th>초과수익(+/-)</th>`;
+            headHTML += `</tr>`;
+            document.getElementById('returnHead').innerHTML = headHTML;
+
+            const periods = [
+                { key: 'ret_1m', label: '1M' }, { key: 'ret_3m', label: '3M' }, { key: 'ret_6m', label: '6M' },
+                { key: 'ret_ytd', label: 'YTD' }, { key: 'ret_1y', label: '1Y' }, { key: 'ret_3y', label: '3Y' },
+                { key: 'ret_5y', label: '5Y' }, { key: 'ret_10y', label: '10Y' }
+            ];
+            
+            let returnHTML = '';
+            periods.forEach(p => {
+                let val = retData[p.key];
+                let valStr = "-"; let color = "#333";
+                if (val !== undefined && val !== null) {
+                    valStr = val.toFixed(2) + "%";
+                    if (val > 0) color = "#d32f2f"; else if (val < 0) color = "#1976d2";
+                }
+
+                if (benchTicker) {
+                    let bVal = benchData[p.key];
+                    let bValStr = "-"; let bColor = "#333";
+                    if (bVal !== undefined && bVal !== null) {
+                        bValStr = bVal.toFixed(2) + "%";
+                        if (bVal > 0) bColor = "#d32f2f"; else if (bVal < 0) bColor = "#1976d2";
+                    }
+
+                    let diffStr = "-"; let diffColor = "#333";
+                    if (val !== undefined && val !== null && bVal !== undefined && bVal !== null) {
+                        let diff = val - bVal;
+                        diffStr = (diff > 0 ? "+" : "") + diff.toFixed(2) + "%";
+                        if (diff > 0) diffColor = "#d32f2f"; else if (diff < 0) diffColor = "#1976d2";
+                    }
+
+                    returnHTML += `<tr>
+                        <td style="text-align: left; color:#555;">${p.label}</td>
+                        <td style="color:${color};">${valStr}</td>
+                        <td style="color:${bColor};">${bValStr}</td>
+                        <td style="color:${diffColor}; background-color: #f1f3f5; border-radius: 4px;">${diffStr}</td>
+                    </tr>`;
+                } else {
+                    returnHTML += `<tr>
+                        <td style="text-align: left; color:#555;">${p.label}</td>
+                        <td style="color:${color};">${valStr}</td>
+                    </tr>`;
+                }
+            });
+            document.getElementById('returnBody').innerHTML = returnHTML;
+
+            document.getElementById('holdingsModal').style.display = 'block';
+        }
+
+        function closeModal() {
+            document.getElementById('holdingsModal').style.display = 'none';
+        }
+
+        window.onclick = function(event) {
+            const modal = document.getElementById('holdingsModal');
+            if (event.target == modal) closeModal();
+            if (!document.querySelector('.search-wrapper').contains(event.target)) document.getElementById('autocompleteList').innerHTML = '';
+            if (!document.querySelector('.benchmark-wrapper').contains(event.target)) document.getElementById('benchmarkList').innerHTML = '';
+        }
+    </script>
+</body>
+</html>
