@@ -1,10 +1,9 @@
 # ETF-Stock-Exposure-Tool
 
 ETF별 상위 10개 종목만 확인 가능합니다
+02.27 update
 
 ## 🚀 [실행 화면 (Live Demo) 바로가기](https://shadow7qe7.github.io/ETF-Stock-Exposure-Tool/)
-
-02.27 update
 
 면책 조항 (Disclaimer):
 본 서비스는 개인적인 학습 및 포트폴리오 목적으로 제작되었으며, 상업적 목적으로 이용되지 않습니다.
